@@ -1,23 +1,6 @@
+use crate::libs::responses::SubSonicErrorResponse;
 use anyhow::{anyhow, Result};
 use reqwest::blocking::Response;
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SubSonicError {
-    #[serde(rename = "@code")]
-    code: u16,
-    #[serde(rename = "@message")]
-    message: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename = "subsonic-response")]
-pub struct SubSonicResponse {
-    #[serde(rename = "@status")]
-    status: String,
-    error: Option<SubSonicError>,
-}
-
 pub struct Server {
     host: String,
     username: String,
@@ -43,7 +26,7 @@ impl Server {
         let response = self.get("ping", None)?;
         let status = response.status();
         let text = response.text()?;
-        let xml = serde_xml_rs::from_str::<SubSonicResponse>(&text)
+        let xml = serde_xml_rs::from_str::<SubSonicErrorResponse>(&text)
             .map_err(|_e| anyhow!(format!("status {}\n{}", status.to_string(), text)))?;
         if xml.status != "ok" {
             return match xml.error {

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.99"
 clap = { version = "4.5.47", features = ["derive"] }
+colored = "3.0.0"
 reqwest = { version = "0.12.23", features = ["blocking"] }
 serde = { version = "1.0.221", features = ["derive"] }
 serde-xml-rs = "0.8.1"
