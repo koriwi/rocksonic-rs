@@ -15,7 +15,7 @@ pub struct SubSonicError {
 pub struct SubSonicResponse {
     #[serde(rename = "@status")]
     status: String,
-    error: SubSonicError,
+    error: Option<SubSonicError>,
 }
 
 pub struct Server {
@@ -35,16 +35,21 @@ impl Server {
             Some(params) => format!("{host}/{endpoint}?{base_params}&{params}"),
             None => format!("{host}/{endpoint}?{base_params}"),
         };
-        println!("{url}");
         let res = reqwest::blocking::get(url)?;
         Ok(res)
     }
 
     fn test_connection(&self) -> Result<()> {
         let response = self.get("ping", None)?;
-        let xml = serde_xml_rs::from_str::<SubSonicResponse>(&response.text()?)?;
+        let status = response.status();
+        let text = response.text()?;
+        let xml = serde_xml_rs::from_str::<SubSonicResponse>(&text)
+            .map_err(|_e| anyhow!(format!("status {}\n{}", status.to_string(), text)))?;
         if xml.status != "ok" {
-            return Result::Err(anyhow!(xml.error.message));
+            return match xml.error {
+                Some(error) => Result::Err(anyhow!(error.message)),
+                None => Result::Err(anyhow!(status)),
+            };
         }
         Ok(())
     }
