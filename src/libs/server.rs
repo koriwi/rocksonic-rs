@@ -1,6 +1,9 @@
-use crate::libs::responses::SubSonicErrorResponse;
+use std::time::Duration;
+
+use crate::libs::responses::{SubSonicErrorResponse, SubSonicSong, SubSonicStarredResponse};
 use anyhow::{anyhow, Result};
 use reqwest::blocking::Response;
+
 pub struct Server {
     host: String,
     username: String,
@@ -18,7 +21,10 @@ impl Server {
             Some(params) => format!("{host}/{endpoint}?{base_params}&{params}"),
             None => format!("{host}/{endpoint}?{base_params}"),
         };
-        let res = reqwest::blocking::get(url)?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()?;
+        let res = client.get(url).send()?;
         Ok(res)
     }
 
@@ -35,6 +41,29 @@ impl Server {
             };
         }
         Ok(())
+    }
+
+    pub fn get_song(&self, id: &str) -> Result<Response> {
+        let response = self.get(
+            "download",
+            Some(&format!("id={}&maxBitRate=320&format=mp3", id)),
+            // Some(&format!("id={}", id)),
+        )?;
+
+        if let Some(content_type) = response.headers().get("Content-Type") {
+            if content_type == "text/xml" {
+                let xml = serde_xml_rs::from_str::<SubSonicErrorResponse>(&response.text()?)?;
+                let error_message = xml.error.ok_or(anyhow!("unknown error"))?.message;
+                return Result::Err(anyhow!(error_message));
+            }
+        };
+        Ok(response)
+    }
+
+    pub fn get_favs(&self) -> Result<Vec<SubSonicSong>> {
+        let response = self.get("getStarred", None)?;
+        let xml = serde_xml_rs::from_str::<SubSonicStarredResponse>(&response.text()?)?;
+        Ok(xml.starred.songs)
     }
 
     pub fn connect(host: String, username: String, password: String) -> Result<Self> {
