@@ -1,11 +1,15 @@
 use anyhow::{anyhow, Result};
 use ffprobe::Stream;
+//"pix_fmt": "yuvj420p", "color_range": "full", "colorspace": "bt470bg"
 pub fn extract_cover(song_path: &str, cover_path: &str) -> Result<()> {
     let mut command = ffmpeg_sidecar::command::FfmpegCommand::new()
-        .input(&song_path)
+        .input(song_path)
         .args(["-an"])
         .args(["-vcodec", "copy"])
         .args(["-f", "mjpeg"])
+        .args(["-pix_fmt", "yuvj420p"])
+        .args(["-color_range", "full"])
+        .args(["-colorspace", "bt470bg"])
         .overwrite()
         .output(cover_path)
         .spawn()
