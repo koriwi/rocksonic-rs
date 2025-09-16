@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::libs::responses::{SubSonicErrorResponse, SubSonicSong, SubSonicStarredResponse};
 use anyhow::{anyhow, Result};
-use reqwest::blocking::Response;
+use reqwest::{blocking::Response, retry::Builder};
 
 pub struct Server {
     host: String,
@@ -22,7 +22,8 @@ impl Server {
             None => format!("{host}/{endpoint}?{base_params}"),
         };
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(30))
+            .retry(reqwest::retry::for_host(self.host.clone()).max_retries_per_request(1000))
             .build()?;
         let res = client.get(url).send()?;
         Ok(res)
@@ -46,8 +47,8 @@ impl Server {
     pub fn get_song(&self, id: &str) -> Result<Response> {
         let response = self.get(
             "download",
-            Some(&format!("id={}&maxBitRate=320&format=mp3", id)),
-            // Some(&format!("id={}", id)),
+            // Some(&format!("id={}&maxBitRate=320&format=mp3", id)),
+            Some(&format!("id={}", id)),
         )?;
 
         if let Some(content_type) = response.headers().get("Content-Type") {
