@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::libs::responses::{SubSonicErrorResponse, SubSonicSong, SubSonicStarredResponse};
 use anyhow::{anyhow, Result};
-use reqwest::{blocking::Response, retry::Builder};
+use reqwest::blocking::Response;
 
 pub struct Server {
     host: String,
@@ -11,7 +11,7 @@ pub struct Server {
 }
 
 impl Server {
-    fn get(&self, endpoint: &str, params: Option<&str>) -> Result<Response> {
+    fn get(&self, endpoint: &str, params: Option<&String>) -> Result<Response> {
         let host = self.host.clone();
         let username = self.username.clone();
         let password = self.password.clone();
@@ -44,12 +44,13 @@ impl Server {
         Ok(())
     }
 
-    pub fn get_song(&self, id: &str) -> Result<Response> {
-        let response = self.get(
-            "download",
-            // Some(&format!("id={}&maxBitRate=320&format=mp3", id)),
-            Some(&format!("id={}", id)),
-        )?;
+    pub fn get_song(&self, id: &str, mp3: Option<u16>) -> Result<Response> {
+        let params = if let Some(bitrate) = mp3 {
+            Some(&format!("id={}&maxBitRate={}&format=mp3", id, bitrate))
+        } else {
+            Some(&format!("id={}", id))
+        };
+        let response = self.get("download", params)?;
 
         if let Some(content_type) = response.headers().get("Content-Type") {
             if content_type == "text/xml" {

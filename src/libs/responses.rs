@@ -26,6 +26,8 @@ pub struct SubSonicSong {
     pub track: String,
     #[serde(rename = "@album")]
     pub album: String,
+    #[serde(rename = "@artist")]
+    pub artist: String,
     #[serde(rename = "@suffix")]
     pub suffix: String,
     #[serde(rename = "@size")]
