@@ -34,6 +34,7 @@ jobs:
           key: ${{ runner.os }}-imagemagick-7.1.1-29-build
 
       - name: configure imagemagick
+        if: steps.imagemagick-build-cache.outputs.cache-hit != 'true'
         run: |
           echo "Building ImageMagick 7 from source..."
           wget https://github.com/ImageMagick/ImageMagick/archive/7.1.1-29.tar.gz
