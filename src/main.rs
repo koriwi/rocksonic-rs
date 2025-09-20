@@ -43,6 +43,9 @@ struct Args {
 
     #[arg(short, long)]
     threads: Option<u16>,
+
+    #[arg(short, long)]
+    flat: bool,
 }
 
 fn print_status(
@@ -90,6 +93,9 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
     let mut library_dir = String::from("./rocksonic_songs/favs");
+    if args.flat {
+        library_dir = format!("{}_flat", library_dir);
+    }
     if args.mp3.is_some() {
         library_dir = format!("{}_mp3", library_dir);
     }
@@ -157,17 +163,33 @@ fn main() -> Result<()> {
                     } else {
                         fav.suffix.clone()
                     };
-                    let sanitized_filename = sanitize_filename::sanitize(format!(
-                        "{} {} {:0>3} {}.{}",
-                        fav.artist, fav.album, fav.track, fav.title, suffix
-                    ));
-                    let combined_path = format!("{}/{}", library_dir, sanitized_filename);
+                    let combined_path = if args.flat {
+                        let sanitized_song = sanitize_filename::sanitize(format!(
+                            "{} {} {:0>3} {}.{}",
+                            fav.artist, fav.album, fav.track, fav.title, suffix
+                        ));
+                        format!("{}/{}", library_dir, sanitized_song)
+                    } else {
+                        let sanitized_artist = sanitize_filename::sanitize(&fav.artist);
+                        let sanitized_album = sanitize_filename::sanitize(&fav.album);
+
+                        let sanitized_directory =
+                            format!("{}/{}/{}", library_dir, sanitized_artist, sanitized_album);
+                        fs::create_dir_all(&sanitized_directory)?;
+
+                        let sanitized_song = sanitize_filename::sanitize(format!(
+                            "{:0>3} {}.{}",
+                            fav.track, fav.title, suffix
+                        ));
+                        format!("{}/{}", sanitized_directory, sanitized_song)
+                    };
+                    // let combined_path = format!("{}/{}", library_dir, sanitized_filename);
                     let combined_exists = fs::exists(&combined_path)?;
                     if !combined_exists {
                         if song_has_cover {
                             ffmpeg::combine_song_and_cover(
                                 &song_path,
-                                &cover_path,
+                                &converted_cover_path,
                                 &combined_path,
                             )?;
                             actions.push(Action::CoverEmbedded)
