@@ -148,12 +148,16 @@ fn main() -> Result<()> {
                 (|| {
                     let mut actions = vec![];
 
-                    let song_path = format!("./rocksonic_songs/.mp3/{}", fav.id);
+                    let song_path = format!(
+                        "./rocksonic_songs/.mp3/{}_{}",
+                        fav.id,
+                        args.mp3.unwrap_or(320)
+                    );
                     let song_exists = fs::exists(&song_path)?;
                     if !song_exists {
                         actions.push(Action::Downloaded);
-                        let mut res = server.get_song(&fav.id, args.mp3).unwrap();
-                        libs::utils::download_file(&mut res, &fav.id)?;
+                        let mut res = server.get_song(&fav.id, args.mp3)?;
+                        libs::utils::download_file(&mut res, &song_path)?;
                     }
 
                     let cover_path = format!("./rocksonic_songs/.cover/{}_orig", fav.id);
