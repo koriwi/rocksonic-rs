@@ -23,7 +23,7 @@ enum Action {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, disable_help_flag = true)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Don't forget the \"/rest\"")]
     host: String,
 
     #[arg(short, long)]
@@ -35,7 +35,7 @@ struct Args {
     #[arg(long, action = clap::ArgAction::Help)]
     help: Option<bool>,
 
-    #[arg(short, long)]
+    #[arg(short, long, help = "enables mp3 conversion. parameter in kbits")]
     mp3: Option<u16>,
 
     #[arg(short, long, default_value = "500")]
@@ -44,8 +44,15 @@ struct Args {
     #[arg(short, long)]
     threads: Option<u16>,
 
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        help = "put all files in one folder. puts the artist and album name in the file name"
+    )]
     flat: bool,
+
+    #[arg(short = 'l', long, help = "use fav (liked songs) or the <playlist-id>")]
+    playlist: Option<String>,
 }
 
 fn print_status(
@@ -90,20 +97,25 @@ fn setup_dirs(library_dir: &str) -> Result<()> {
 
 fn main() -> Result<()> {
     magick_wand_genesis();
-
     let args = Args::parse();
-    let mut library_dir = String::from("./rocksonic_songs/favs");
-    if args.flat {
-        library_dir = format!("{}_flat", library_dir);
-    }
-    if args.mp3.is_some() {
-        library_dir = format!("{}_mp3", library_dir);
-    }
-    setup_dirs(&library_dir)?;
 
     let server = Server::connect(args.host, args.username, args.password).inspect_err(|_e| {
         println!("Could not connect to the server. Did you forget /rest ?");
     })?;
+
+    let mut library_dir = String::from("./rocksonic_songs/");
+    library_dir += match args.playlist.as_ref() {
+        None => String::from("favs"),
+        Some(playlist) => server.get_playlist(playlist)?.playlist.name,
+    }
+    .as_str();
+    if args.flat {
+        library_dir = format!("{} flat", library_dir);
+    }
+    if args.mp3.is_some() {
+        library_dir = format!("{} mp3", library_dir);
+    }
+    setup_dirs(&library_dir)?;
 
     println!("Welcome to {}!", "RockSonic".yellow().bold());
     println!("{}", "Successfully connected to SubSonic".green().italic());
@@ -113,7 +125,10 @@ fn main() -> Result<()> {
         .num_threads(num_threads as usize)
         .build_global()?;
 
-    let favs = server.get_favs()?;
+    let favs = match args.playlist.as_ref() {
+        None => server.get_favs()?,
+        Some(playlist_id) => server.get_playlist(playlist_id)?.playlist.songs,
+    };
     let longest_title = favs
         .iter()
         .reduce(|acc, f| {
@@ -166,7 +181,11 @@ fn main() -> Result<()> {
                     let combined_path = if args.flat {
                         let sanitized_song = sanitize_filename::sanitize(format!(
                             "{} {} {:0>3} {}.{}",
-                            fav.artist, fav.album, fav.track, fav.title, suffix
+                            fav.artist,
+                            fav.album,
+                            fav.track.unwrap_or(0),
+                            fav.title,
+                            suffix
                         ));
                         format!("{}/{}", library_dir, sanitized_song)
                     } else {
@@ -179,7 +198,9 @@ fn main() -> Result<()> {
 
                         let sanitized_song = sanitize_filename::sanitize(format!(
                             "{:0>3} {}.{}",
-                            fav.track, fav.title, suffix
+                            fav.track.unwrap_or(0),
+                            fav.title,
+                            suffix
                         ));
                         format!("{}/{}", sanitized_directory, sanitized_song)
                     };

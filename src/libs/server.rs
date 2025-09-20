@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use crate::libs::responses::{SubSonicErrorResponse, SubSonicSong, SubSonicStarredResponse};
+use crate::libs::responses::{
+    SubSonicErrorResponse, SubSonicPlaylistResponse, SubSonicSong, SubSonicStarredResponse,
+};
 use anyhow::{anyhow, Result};
 use reqwest::blocking::Response;
 
@@ -62,6 +64,11 @@ impl Server {
         Ok(response)
     }
 
+    pub fn get_playlist(&self, playlist_id: &str) -> Result<SubSonicPlaylistResponse> {
+        let response = self.get("getPlaylist", Some(&format!("id={}", playlist_id)))?;
+        let xml = serde_xml_rs::from_str::<SubSonicPlaylistResponse>(&response.text()?)?;
+        Ok(xml)
+    }
     pub fn get_favs(&self) -> Result<Vec<SubSonicSong>> {
         let response = self.get("getStarred", None)?;
         let xml = serde_xml_rs::from_str::<SubSonicStarredResponse>(&response.text()?)?;

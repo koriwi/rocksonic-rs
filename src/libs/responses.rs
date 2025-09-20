@@ -23,7 +23,7 @@ pub struct SubSonicSong {
     #[serde(rename = "@title")]
     pub title: String,
     #[serde(rename = "@track")]
-    pub track: String,
+    pub track: Option<u16>,
     #[serde(rename = "@album")]
     pub album: String,
     #[serde(rename = "@artist")]
@@ -35,11 +35,23 @@ pub struct SubSonicSong {
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
+pub struct SubSonicPlaylist {
+    #[serde(rename = "entry")]
+    pub songs: Vec<SubSonicSong>,
+    #[serde(rename = "@name")]
+    pub name: String,
+}
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename = "subsonic-response")]
+pub struct SubSonicPlaylistResponse {
+    pub playlist: SubSonicPlaylist,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct SubSonicStarred {
     #[serde(rename = "song")]
     pub songs: Vec<SubSonicSong>,
 }
-
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename = "subsonic-response")]
 pub struct SubSonicStarredResponse {
