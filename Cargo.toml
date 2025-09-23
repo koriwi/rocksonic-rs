@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0.99"
 clap = { version = "4.5.47", features = ["derive"] }
 colored = "3.0.0"
+dirs = "6.0.0"
 ffmpeg-sidecar = "2.2.0"
 ffprobe = "0.4.0"
 magick_rust = { version = "1.1.0", features = ["disable-hdri"] }
@@ -15,3 +16,4 @@ reqwest = { version = "0.12.23", features = ["blocking"] }
 sanitize-filename = "0.6.0"
 serde = { version = "1.0.221", features = ["derive"] }
 serde-xml-rs = "0.8.1"
+serde_json = "1.0.145"

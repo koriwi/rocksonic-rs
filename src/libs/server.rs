@@ -46,6 +46,19 @@ impl Server {
         Ok(())
     }
 
+    pub fn get_cover_art(&self, id: &str, size: u16) -> Result<Response> {
+        let response = self.get("getCoverArt", Some(&format!("id={}&size={}", id, size)))?;
+
+        if let Some(content_type) = response.headers().get("Content-Type") {
+            if content_type == "text/xml" {
+                let xml = serde_xml_rs::from_str::<SubSonicErrorResponse>(&response.text()?)?;
+                let error_message = xml.error.ok_or(anyhow!("unknown error"))?.message;
+                return Result::Err(anyhow!(error_message));
+            }
+        };
+        Ok(response)
+    }
+
     pub fn get_song(&self, id: &str, mp3: Option<u16>) -> Result<Response> {
         let params = if let Some(bitrate) = mp3 {
             Some(&format!("id={}&maxBitRate={}&format=mp3", id, bitrate))

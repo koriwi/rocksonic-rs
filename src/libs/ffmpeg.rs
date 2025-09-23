@@ -33,6 +33,7 @@ pub fn combine_song_and_cover(
         .args(["-map", "0:a"])
         .args(["-map", "1:0"])
         .args(["-c:v", "copy"])
+        .args(["-c:a", "copy"])
         .args(["-metadata:s:v:0", "comment=\"Cover (front)\""])
         .args(["-metadata:s:v:0", "title=\"Album cover\""])
         .args(["-disposition:v:0", "attached_pic"])
