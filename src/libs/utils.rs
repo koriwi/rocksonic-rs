@@ -13,7 +13,6 @@ pub fn sanitize_filename(file_name: &str) -> String {
 }
 
 pub fn download_file(req_res: &mut Response, file_path: &str) -> Result<()> {
-    // let sanitized_file_path = sanitize_filename::sanitize_with_options(file_path, SANITIZE_OPTIONS);
     let mut file = File::create(file_path)?;
     io::copy(req_res, &mut file)?;
     Ok(())

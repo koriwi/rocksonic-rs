@@ -83,9 +83,9 @@ struct Args {
 
 fn parse_args(daemon_arg: Option<String>) -> Args {
     if let Some(daemon_dir) = daemon_arg {
+        println!("searching for device with rocksonic.json");
         loop {
             sleep(Duration::from_millis(500));
-            println!("searching for device with rocksonic.json");
             let dirs = fs::read_dir(&daemon_dir).expect("could not read daemon dir");
             let found_file = dirs
                 .filter_map(|dir_result| dir_result.ok())
@@ -131,6 +131,7 @@ fn main() -> Result<()> {
             Server::connect(args.host, args.username, args.password).inspect_err(|_e| {
                 println!("Could not connect to the server. Did you forget /rest ?");
             })?;
+
         let mut library_dir = String::from("/");
         library_dir += match args.playlist.as_ref() {
             None => String::from("favs"),
