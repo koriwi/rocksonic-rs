@@ -5,6 +5,7 @@ use dirs::home_dir;
 use magick_rust::magick_wand_genesis;
 use serde::Deserialize;
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     fs,
     sync::atomic::{self, AtomicU32},
@@ -32,6 +33,112 @@ fn setup_dirs(rocksonic_dir: &str, library_dir: &str, cache_dir: &str) -> Result
     fs::create_dir_all(format!("{}/{}", rs_dir, cache_dir))?;
     fs::create_dir_all(rs_dir.clone() + "/.cover")?;
     fs::create_dir_all(rs_dir.clone() + library_dir)?;
+    Ok(())
+}
+
+fn build_combined_path(
+    fav: &SubSonicSong,
+    output_dir: &str,
+    library_dir: &str,
+    mp3: Option<u16>,
+    flat: bool,
+) -> String {
+    let suffix = if mp3.is_some() || fav.suffix == "opus" {
+        String::from("mp3")
+    } else {
+        fav.suffix.clone()
+    };
+    if flat {
+        let sanitized_song = sanitize_filename::sanitize(format!(
+            "{} {} {:0>3} {}.{}",
+            fav.artist,
+            fav.album,
+            fav.track.unwrap_or(0),
+            fav.title,
+            suffix
+        ));
+        format!("{}/{}/{}", output_dir, library_dir, sanitized_song)
+    } else {
+        let sanitized_artist = sanitize_filename::sanitize(&fav.artist);
+        let sanitized_album = sanitize_filename::sanitize(&fav.album);
+        let sanitized_directory = format!(
+            "{}/{}/{}/{}",
+            output_dir, library_dir, sanitized_artist, sanitized_album
+        );
+        let sanitized_song = sanitize_filename::sanitize(format!(
+            "{:0>3} {}.{}",
+            fav.track.unwrap_or(0),
+            fav.title,
+            suffix
+        ));
+        format!("{}/{}", sanitized_directory, sanitized_song)
+    }
+}
+
+fn sync_output_dir(
+    output_dir: &str,
+    library_dir: &str,
+    expected_paths: &HashSet<String>,
+    flat: bool,
+) -> Result<()> {
+    let lib_path = format!("{}/{}", output_dir, library_dir);
+    if !fs::exists(&lib_path)? {
+        return Ok(());
+    }
+    if flat {
+        for entry in fs::read_dir(&lib_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let path_str = path.to_string_lossy().to_string();
+                if !expected_paths.contains(&path_str) {
+                    fs::remove_file(&path)?;
+                    println!("removed {}", path_str);
+                }
+            }
+        }
+    } else {
+        for artist_entry in fs::read_dir(&lib_path)? {
+            let artist_entry = artist_entry?;
+            let artist_path = artist_entry.path();
+            if !artist_path.is_dir() {
+                continue;
+            }
+            for album_entry in fs::read_dir(&artist_path)? {
+                let album_entry = album_entry?;
+                let album_path = album_entry.path();
+                if !album_path.is_dir() {
+                    continue;
+                }
+                for file_entry in fs::read_dir(&album_path)? {
+                    let file_entry = file_entry?;
+                    let file_path = file_entry.path();
+                    if !file_path.is_file() {
+                        continue;
+                    }
+                    if file_path.file_name().and_then(|n| n.to_str()) == Some("cover.jpeg") {
+                        continue;
+                    }
+                    let path_str = file_path.to_string_lossy().to_string();
+                    if !expected_paths.contains(&path_str) {
+                        fs::remove_file(&file_path)?;
+                        println!("removed {}", path_str);
+                    }
+                }
+                // If no songs remain (only cover.jpeg or empty), remove the whole album dir
+                let has_songs = fs::read_dir(&album_path)?
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_str() != Some("cover.jpeg"));
+                if !has_songs {
+                    fs::remove_dir_all(&album_path)?;
+                }
+            }
+            // Remove artist dir if empty
+            if fs::read_dir(&artist_path)?.next().is_none() {
+                fs::remove_dir(&artist_path)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -79,6 +186,10 @@ struct Args {
 
     #[arg(short = 'l', long, help = "use fav (liked songs) or the <playlist-id>")]
     playlist: Option<String>,
+
+    #[serde(default)]
+    #[arg(short, long, help = "remove files from the output folder that are no longer in the playlist")]
+    sync: bool,
 }
 
 fn parse_args(daemon_arg: Option<String>) -> Args {
@@ -273,6 +384,15 @@ fn main() -> Result<()> {
             .for_each(|result| {
                 print_status(result, &songs_done_counter, favs.len(), longest_title.len())
             });
+
+        if args.sync {
+            let expected_paths: HashSet<String> = favs
+                .iter()
+                .map(|fav| build_combined_path(fav, &output_dir, &library_dir, args.mp3, args.flat))
+                .collect();
+            sync_output_dir(&output_dir, &library_dir, &expected_paths, args.flat)?;
+        }
+
         if daemon_arg.daemon.is_none() {
             break Ok(());
         }

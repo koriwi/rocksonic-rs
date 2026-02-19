@@ -45,6 +45,7 @@ If no output directory is given, the current directory is used.
 | `-c, --coversize <px>` | `500` | Cover art size in pixels |
 | `-t, --threads <n>` | `5` | Number of parallel download threads |
 | `-f, --flat` | off | Put all files in one folder; artist and album are added to the filename |
+| `-s, --sync` | off | Remove files from the output folder that are no longer in the playlist |
 
 ### Examples
 
