@@ -26,10 +26,10 @@ enum Action {
     CoverEmbedded,
 }
 
-fn setup_dirs(rocksonic_dir: &str, library_dir: &str) -> Result<()> {
+fn setup_dirs(rocksonic_dir: &str, library_dir: &str, cache_dir: &str) -> Result<()> {
     let rs_dir = String::from(rocksonic_dir);
     println!("rs_dir {}", rs_dir);
-    fs::create_dir_all(rs_dir.clone() + "/.mp3")?;
+    fs::create_dir_all(format!("{}/{}", rs_dir, cache_dir))?;
     fs::create_dir_all(rs_dir.clone() + "/.cover")?;
     fs::create_dir_all(rs_dir.clone() + library_dir)?;
     Ok(())
@@ -144,7 +144,8 @@ fn main() -> Result<()> {
         if args.mp3.is_some() {
             library_dir = format!("{} mp3", library_dir);
         }
-        setup_dirs(&rocksonic_dir, &library_dir)?;
+        let cache_dir = if args.mp3.is_some() { ".mp3" } else { ".cache" };
+        setup_dirs(&rocksonic_dir, &library_dir, cache_dir)?;
 
         println!("Welcome to {}!", "RockSonic".yellow().bold());
         println!("{}", "Successfully connected to SubSonic".green().italic());
@@ -177,10 +178,11 @@ fn main() -> Result<()> {
                         let mut actions = vec![];
 
                         let song_path = format!(
-                            "{}/.mp3/{}_{}",
+                            "{}/{}/{}_{}",
                             rocksonic_dir,
+                            cache_dir,
                             fav.id,
-                            args.mp3.unwrap_or(320)
+                            args.mp3.map(|b| b.to_string()).unwrap_or_else(|| String::from("orig"))
                         );
                         let song_exists = fs::exists(&song_path)?;
                         if !song_exists {
