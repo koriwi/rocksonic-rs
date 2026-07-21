@@ -1,13 +1,15 @@
 pub mod libs;
-use crate::libs::{ffmpeg, magick, responses::SubSonicSong, server::Server, utils::download_file};
+use crate::libs::{
+    ffmpeg, magick, responses::SubSonicSong, server::Server, sync, utils::download_file,
+};
 
 use dirs::home_dir;
 use magick_rust::magick_wand_genesis;
 use serde::Deserialize;
 use std::{
     collections::HashSet,
-    ffi::OsStr,
     fs,
+    path::Path,
     sync::atomic::{self, AtomicU32},
     thread::sleep,
     time::Duration,
@@ -28,118 +30,75 @@ enum Action {
 }
 
 fn setup_dirs(rocksonic_dir: &str, library_dir: &str, cache_dir: &str) -> Result<()> {
-    let rs_dir = String::from(rocksonic_dir);
-    println!("rs_dir {}", rs_dir);
-    fs::create_dir_all(format!("{}/{}", rs_dir, cache_dir))?;
-    fs::create_dir_all(rs_dir.clone() + "/.cover")?;
-    fs::create_dir_all(rs_dir.clone() + library_dir)?;
+    fs::create_dir_all(format!("{}/{}", rocksonic_dir, cache_dir))?;
+    fs::create_dir_all(format!("{}/.cover", rocksonic_dir))?;
+    fs::create_dir_all(format!("{}/{}", rocksonic_dir, library_dir))?;
     Ok(())
 }
 
-fn build_combined_path(
-    fav: &SubSonicSong,
+fn process_song(
+    song: &SubSonicSong,
+    server: &Server,
+    rocksonic_dir: &str,
+    cache_dir: &str,
     output_dir: &str,
     library_dir: &str,
     mp3: Option<u16>,
     flat: bool,
-) -> String {
-    let suffix = if mp3.is_some() || fav.suffix == "opus" {
-        String::from("mp3")
-    } else {
-        fav.suffix.clone()
-    };
-    if flat {
-        let sanitized_song = sanitize_filename::sanitize(format!(
-            "{} {} {:0>3} {}.{}",
-            fav.artist,
-            fav.album,
-            fav.track.unwrap_or(0),
-            fav.title,
-            suffix
-        ));
-        format!("{}/{}/{}", output_dir, library_dir, sanitized_song)
-    } else {
-        let sanitized_artist = sanitize_filename::sanitize(&fav.artist);
-        let sanitized_album = sanitize_filename::sanitize(&fav.album);
-        let sanitized_directory = format!(
-            "{}/{}/{}/{}",
-            output_dir, library_dir, sanitized_artist, sanitized_album
-        );
-        let sanitized_song = sanitize_filename::sanitize(format!(
-            "{:0>3} {}.{}",
-            fav.track.unwrap_or(0),
-            fav.title,
-            suffix
-        ));
-        format!("{}/{}", sanitized_directory, sanitized_song)
-    }
-}
+    coversize: u16,
+) -> Result<Vec<Action>> {
+    let mut actions = vec![];
 
-fn sync_output_dir(
-    output_dir: &str,
-    library_dir: &str,
-    expected_paths: &HashSet<String>,
-    flat: bool,
-) -> Result<()> {
-    let lib_path = format!("{}/{}", output_dir, library_dir);
-    if !fs::exists(&lib_path)? {
-        return Ok(());
+    let cached_path = format!(
+        "{}/{}/{}_{}",
+        rocksonic_dir,
+        cache_dir,
+        song.id,
+        mp3.map(|b| b.to_string())
+            .unwrap_or_else(|| String::from("orig"))
+    );
+    if !fs::exists(&cached_path)? {
+        actions.push(Action::Downloaded);
+        let mut song_res = server.get_song(&song.id, mp3)?;
+        download_file(&mut song_res, &cached_path)?;
     }
-    if flat {
-        for entry in fs::read_dir(&lib_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let path_str = path.to_string_lossy().to_string();
-                if !expected_paths.contains(&path_str) {
-                    fs::remove_file(&path)?;
-                    println!("removed {}", path_str);
-                }
-            }
-        }
-    } else {
-        for artist_entry in fs::read_dir(&lib_path)? {
-            let artist_entry = artist_entry?;
-            let artist_path = artist_entry.path();
-            if !artist_path.is_dir() {
-                continue;
-            }
-            for album_entry in fs::read_dir(&artist_path)? {
-                let album_entry = album_entry?;
-                let album_path = album_entry.path();
-                if !album_path.is_dir() {
-                    continue;
-                }
-                for file_entry in fs::read_dir(&album_path)? {
-                    let file_entry = file_entry?;
-                    let file_path = file_entry.path();
-                    if !file_path.is_file() {
-                        continue;
-                    }
-                    if file_path.file_name().and_then(|n| n.to_str()) == Some("cover.jpeg") {
-                        continue;
-                    }
-                    let path_str = file_path.to_string_lossy().to_string();
-                    if !expected_paths.contains(&path_str) {
-                        fs::remove_file(&file_path)?;
-                        println!("removed {}", path_str);
-                    }
-                }
-                // If no songs remain (only cover.jpeg or empty), remove the whole album dir
-                let has_songs = fs::read_dir(&album_path)?
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.file_name().to_str() != Some("cover.jpeg"));
-                if !has_songs {
-                    fs::remove_dir_all(&album_path)?;
-                }
-            }
-            // Remove artist dir if empty
-            if fs::read_dir(&artist_path)?.next().is_none() {
-                fs::remove_dir(&artist_path)?;
-            }
+
+    let cover_path = format!("{}/.cover/{}_{}", rocksonic_dir, song.id, coversize);
+    if !fs::exists(&cover_path)? {
+        let mut cover_response = server.get_cover_art(&song.id, coversize)?;
+        download_file(&mut cover_response, &cover_path)?;
+        actions.push(Action::CoverDownloaded);
+    }
+
+    let converted_cover_path = format!(
+        "{}/.cover/{}_{}_baseline",
+        rocksonic_dir, song.id, coversize
+    );
+    if !fs::exists(&converted_cover_path)? {
+        magick::convert_image(&cover_path, &converted_cover_path)?;
+        actions.push(Action::CoverConverted);
+    }
+
+    let output_path = sync::song_output_path(song, output_dir, library_dir, mp3, flat);
+
+    if !flat {
+        let album_dir = Path::new(&output_path).parent().unwrap().to_str().unwrap();
+        if !fs::exists(album_dir)? {
+            fs::create_dir_all(album_dir)?;
+            let cover_art_path = format!("{}/cover.jpeg", album_dir);
+            fs::copy(&converted_cover_path, &cover_art_path)?;
         }
     }
-    Ok(())
+
+    if !fs::exists(&output_path)? {
+        ffmpeg::combine_song_and_cover(&cached_path, &converted_cover_path, &output_path)?;
+        actions.push(Action::CoverEmbedded);
+        if mp3.is_some() {
+            actions.push(Action::Converted);
+        }
+    }
+
+    Ok(actions)
 }
 
 #[derive(Parser, Debug)]
@@ -188,37 +147,40 @@ struct Args {
     playlist: Option<String>,
 
     #[serde(default)]
-    #[arg(short, long, help = "remove files from the output folder that are no longer in the playlist")]
+    #[arg(
+        short,
+        long,
+        help = "remove files from the output folder that are no longer in the playlist"
+    )]
     sync: bool,
 }
 
 fn parse_args(daemon_arg: Option<String>) -> Args {
-    if let Some(daemon_dir) = daemon_arg {
-        println!("searching for device with rocksonic.json");
-        loop {
-            sleep(Duration::from_millis(500));
-            let dirs = fs::read_dir(&daemon_dir).expect("could not read daemon dir");
-            let found_file = dirs
-                .filter_map(|dir_result| dir_result.ok())
-                .find_map(|dir| {
-                    fs::read_dir(dir.path()).unwrap().find_map(|dir_entry| {
-                        if let Ok(file) = dir_entry {
-                            if file.file_name() == "rocksonic.json" {
-                                return Some((dir.path(), file));
-                            }
-                        }
+    let Some(daemon_dir) = daemon_arg else {
+        return Args::parse();
+    };
+    println!("searching for device with rocksonic.json");
+    loop {
+        sleep(Duration::from_millis(500));
+        let dirs = fs::read_dir(&daemon_dir).expect("could not read daemon dir");
+        let found_file = dirs
+            .filter_map(|dir_result| dir_result.ok())
+            .find_map(|dir| {
+                fs::read_dir(dir.path()).unwrap().find_map(|entry| {
+                    let file = entry.ok()?;
+                    if file.file_name() == "rocksonic.json" {
+                        Some((dir.path(), file))
+                    } else {
                         None
-                    })
-                });
-            if let Some((dir, file)) = found_file {
-                let content = fs::read_to_string(file.path()).unwrap();
-                let mut args = serde_json::from_str::<Args>(&content).expect("json file not valid");
-                args.output_dir = Some(String::from(dir.to_str().unwrap()));
-                break args;
-            }
+                    }
+                })
+            });
+        if let Some((dir, file)) = found_file {
+            let content = fs::read_to_string(file.path()).unwrap();
+            let mut args = serde_json::from_str::<Args>(&content).expect("json file not valid");
+            args.output_dir = Some(String::from(dir.to_str().unwrap()));
+            break args;
         }
-    } else {
-        Args::parse()
     }
 }
 
@@ -243,17 +205,15 @@ fn main() -> Result<()> {
                 println!("Could not connect to the server. Did you forget /rest ?");
             })?;
 
-        let mut library_dir = String::from("/");
-        library_dir += match args.playlist.as_ref() {
+        let mut library_dir = match args.playlist.as_ref() {
             None => String::from("favs"),
             Some(playlist) => server.get_playlist(playlist)?.playlist.name,
-        }
-        .as_str();
+        };
         if args.flat {
-            library_dir = format!("{} flat", library_dir);
+            library_dir.push_str(" flat");
         }
         if args.mp3.is_some() {
-            library_dir = format!("{} mp3", library_dir);
+            library_dir.push_str(" mp3");
         }
         let cache_dir = if args.mp3.is_some() { ".mp3" } else { ".cache" };
         setup_dirs(&rocksonic_dir, &library_dir, cache_dir)?;
@@ -265,132 +225,40 @@ fn main() -> Result<()> {
         let _tpb = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads as usize)
             .build()?;
-        let favs = match args.playlist.as_ref() {
+        let songs = match args.playlist.as_ref() {
             None => server.get_favs()?,
             Some(playlist_id) => server.get_playlist(playlist_id)?.playlist.songs,
         };
-        let longest_title = favs
-            .iter()
-            .reduce(|acc, f| {
-                if acc.title.len() < f.title.len() {
-                    return f;
-                };
-                acc
-            })
-            .unwrap()
-            .title
-            .clone();
+        let title_width = songs.iter().map(|s| s.title.len()).max().unwrap_or(0);
 
         let songs_done_counter = atomic::AtomicU32::new(0);
-        favs.par_iter()
-            .map(
-                |fav| -> Result<(&libs::responses::SubSonicSong, Vec<Action>)> {
-                    (|| {
-                        let mut actions = vec![];
-
-                        let song_path = format!(
-                            "{}/{}/{}_{}",
-                            rocksonic_dir,
-                            cache_dir,
-                            fav.id,
-                            args.mp3.map(|b| b.to_string()).unwrap_or_else(|| String::from("orig"))
-                        );
-                        let song_exists = fs::exists(&song_path)?;
-                        if !song_exists {
-                            actions.push(Action::Downloaded);
-                            let mut res = server.get_song(&fav.id, args.mp3)?;
-                            libs::utils::download_file(&mut res, &song_path)?;
-                        }
-
-                        let cover_path =
-                            format!("{}/.cover/{}_{}", rocksonic_dir, fav.id, args.coversize);
-                        let cover_exists = fs::exists(&cover_path)?;
-                        if !cover_exists {
-                            let mut cover_response =
-                                server.get_cover_art(&fav.id, args.coversize)?;
-                            download_file(&mut cover_response, &cover_path)?;
-                            actions.push(Action::CoverDownloaded);
-                        };
-
-                        let converted_cover_path = format!(
-                            "{}/.cover/{}_{}_baseline",
-                            rocksonic_dir, fav.id, args.coversize
-                        );
-                        let converted_cover_exists = fs::exists(&converted_cover_path)?;
-                        if !converted_cover_exists {
-                            magick::convert_image(&cover_path, &converted_cover_path)?;
-
-                            actions.push(Action::CoverConverted);
-                        }
-                        let suffix = if args.mp3.is_some() || fav.suffix == "opus" {
-                            String::from("mp3")
-                        } else {
-                            fav.suffix.clone()
-                        };
-
-                        let combined_path = if args.flat {
-                            let sanitized_song = sanitize_filename::sanitize(format!(
-                                "{} {} {:0>3} {}.{}",
-                                fav.artist,
-                                fav.album,
-                                fav.track.unwrap_or(0),
-                                fav.title,
-                                suffix
-                            ));
-                            format!("{}/{}/{}", output_dir, library_dir, sanitized_song)
-                        } else {
-                            let sanitized_artist = sanitize_filename::sanitize(&fav.artist);
-                            let sanitized_album = sanitize_filename::sanitize(&fav.album);
-
-                            let sanitized_directory = format!(
-                                "{}/{}/{}/{}",
-                                output_dir, library_dir, sanitized_artist, sanitized_album
-                            );
-
-                            if !fs::exists(&sanitized_directory)? {
-                                fs::create_dir_all(&sanitized_directory)?;
-
-                                let sanitized_cover_art =
-                                    format!("{}/cover.jpeg", sanitized_directory);
-                                fs::copy(&converted_cover_path, &sanitized_cover_art)?;
-                            }
-                            let sanitized_song = sanitize_filename::sanitize(format!(
-                                "{:0>3} {}.{}",
-                                fav.track.unwrap_or(0),
-                                fav.title,
-                                suffix
-                            ));
-                            format!("{}/{}", sanitized_directory, sanitized_song)
-                        };
-                        let combined_exists = fs::exists(&combined_path)?;
-                        if !combined_exists {
-                            ffmpeg::combine_song_and_cover(
-                                &song_path,
-                                &converted_cover_path,
-                                &combined_path,
-                            )?;
-                            actions.push(Action::CoverEmbedded);
-
-                            if args.mp3.is_some() {
-                                actions.push(Action::Converted);
-                            }
-                        };
-
-                        Ok((fav, actions))
-                    })()
-                    .map_err(|e: Error| anyhow!("{} {} {}", fav.title, fav.id, e))
-                },
-            )
-            .for_each(|result| {
-                print_status(result, &songs_done_counter, favs.len(), longest_title.len())
-            });
+        songs
+            .par_iter()
+            .map(|song| -> Result<(&SubSonicSong, Vec<Action>)> {
+                process_song(
+                    song,
+                    &server,
+                    &rocksonic_dir,
+                    cache_dir,
+                    &output_dir,
+                    &library_dir,
+                    args.mp3,
+                    args.flat,
+                    args.coversize,
+                )
+                .map(|actions| (song, actions))
+                .map_err(|e: Error| anyhow!("{} {} {}", song.title, song.id, e))
+            })
+            .for_each(|result| print_status(result, &songs_done_counter, songs.len(), title_width));
 
         if args.sync {
-            let expected_paths: HashSet<String> = favs
+            let expected_paths: HashSet<String> = songs
                 .iter()
-                .map(|fav| build_combined_path(fav, &output_dir, &library_dir, args.mp3, args.flat))
+                .map(|song| {
+                    sync::song_output_path(song, &output_dir, &library_dir, args.mp3, args.flat)
+                })
                 .collect();
-            sync_output_dir(&output_dir, &library_dir, &expected_paths, args.flat)?;
+            sync::remove_unlisted_songs(&output_dir, &library_dir, &expected_paths, args.flat)?;
         }
 
         if daemon_arg.daemon.is_none() {
@@ -407,33 +275,33 @@ fn main() -> Result<()> {
 
 fn print_status(
     result: Result<(&SubSonicSong, Vec<Action>)>,
-    songs_done_counter: &AtomicU32,
-    song_count: usize,
-    title_spacing: usize,
+    counter: &AtomicU32,
+    total: usize,
+    title_width: usize,
 ) {
-    let songs_done_count = songs_done_counter.fetch_add(1, atomic::Ordering::Release);
+    let count = counter.fetch_add(1, atomic::Ordering::Release);
     match result {
         Ok((song, actions)) => {
-            let mut actions_string = actions
-                .iter()
-                .map(|action| format!("{:?}", action))
-                .collect::<Vec<String>>()
-                .join(", ");
-            if actions_string.is_empty() {
-                actions_string = String::from("nothing to do");
-            }
-
+            let actions_string = if actions.is_empty() {
+                String::from("nothing to do")
+            } else {
+                actions
+                    .iter()
+                    .map(|action| format!("{:?}", action))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            };
             println!(
                 "{:-6}/{} {: ^width$} {}",
-                songs_done_count + 1,
-                song_count,
+                count + 1,
+                total,
                 song.title,
                 actions_string,
-                width = title_spacing
+                width = title_width
             )
         }
         Err(e) => {
-            println!("{:-6}/{} {:?}", songs_done_count + 1, song_count, e)
+            println!("{:-6}/{} {:?}", count + 1, total, e)
         }
     }
 }
