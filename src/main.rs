@@ -9,13 +9,13 @@ use serde::Deserialize;
 use std::{
     collections::HashSet,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::atomic::{self, AtomicU32},
     thread::sleep,
     time::Duration,
 };
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{anyhow, Context, Error, Result};
 use clap::Parser;
 use colored::Colorize;
 use rayon::prelude::*;
@@ -49,15 +49,15 @@ fn process_song(
 ) -> Result<Vec<Action>> {
     let mut actions = vec![];
 
+    let cache_variant = mp3
+        .map(|bitrate| format!("mp3_{bitrate}"))
+        .unwrap_or_else(|| String::from("orig"));
     let cached_path = format!(
         "{}/{}/{}_{}",
-        rocksonic_dir,
-        cache_dir,
-        song.id,
-        mp3.map(|b| b.to_string())
-            .unwrap_or_else(|| String::from("orig"))
+        rocksonic_dir, cache_dir, song.id, cache_variant
     );
-    if !fs::exists(&cached_path)? {
+    let song_downloaded = !fs::exists(&cached_path)?;
+    if song_downloaded {
         actions.push(Action::Downloaded);
         let mut song_res = server.get_song(&song.id, mp3)?;
         download_file(&mut song_res, &cached_path)?;
@@ -90,7 +90,7 @@ fn process_song(
         }
     }
 
-    if !fs::exists(&output_path)? {
+    if song_downloaded || !fs::exists(&output_path)? {
         ffmpeg::combine_song_and_cover(&cached_path, &converted_cover_path, &output_path)?;
         actions.push(Action::CoverEmbedded);
         if mp3.is_some() {
@@ -105,7 +105,10 @@ fn process_song(
 #[command(disable_help_flag = true, long_about = None, ignore_errors = true)]
 struct DaemonArg {
     #[arg(short, long)]
-    daemon: Option<String>,
+    daemon: Option<PathBuf>,
+
+    #[arg(long, value_name = "FILE", conflicts_with = "daemon")]
+    config: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Default, Deserialize)]
@@ -114,13 +117,19 @@ struct Args {
     #[arg()]
     output_dir: Option<String>,
 
-    #[arg(short, long, help = "Don't forget the \"/rest\"")]
+    #[arg(
+        short,
+        long,
+        help = "Don't forget the \"/rest\"",
+        required = false,
+        required_unless_present = "config"
+    )]
     host: String,
 
-    #[arg(short, long)]
+    #[arg(short, long, required = false, required_unless_present = "config")]
     username: String,
 
-    #[arg(short, long)]
+    #[arg(short, long, required = false, required_unless_present = "config")]
     password: String,
 
     #[arg(long, action = clap::ArgAction::Help)]
@@ -129,7 +138,8 @@ struct Args {
     #[arg(short, long, help = "enables mp3 conversion. parameter in kbits")]
     mp3: Option<u16>,
 
-    #[arg(short, long, default_value = "500")]
+    #[serde(default = "default_coversize")]
+    #[arg(short, long, default_value_t = default_coversize())]
     coversize: u16,
 
     #[arg(short, long)]
@@ -153,16 +163,56 @@ struct Args {
         help = "remove files from the output folder that are no longer in the playlist"
     )]
     sync: bool,
+
+    #[serde(skip)]
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "read options from a JSON config file"
+    )]
+    config: Option<PathBuf>,
 }
 
-fn parse_args(daemon_arg: Option<String>) -> Args {
+fn default_coversize() -> u16 {
+    500
+}
+
+fn load_config(path: &Path) -> Result<Args> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("could not read config file {}", path.display()))?;
+    let mut args: Args = serde_json::from_str(&content)
+        .with_context(|| format!("config file {} is not valid JSON", path.display()))?;
+    resolve_config_output_dir(&mut args, path);
+    Ok(args)
+}
+
+fn resolve_config_output_dir(args: &mut Args, config_path: &Path) {
+    let Some(output_dir) = args.output_dir.as_ref() else {
+        return;
+    };
+    if Path::new(output_dir).is_absolute() {
+        return;
+    }
+
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    args.output_dir = Some(config_dir.join(output_dir).to_string_lossy().into_owned());
+}
+
+fn parse_args(daemon_arg: Option<&Path>, config: Option<&Path>) -> Result<Args> {
+    if daemon_arg.is_some() && config.is_some() {
+        return Err(anyhow!("--config cannot be used with --daemon"));
+    }
+    if let Some(config) = config {
+        return load_config(config);
+    }
+
     let Some(daemon_dir) = daemon_arg else {
-        return Args::parse();
+        return Ok(Args::parse());
     };
     println!("searching for device with rocksonic.json");
     loop {
         sleep(Duration::from_millis(500));
-        let dirs = fs::read_dir(&daemon_dir).expect("could not read daemon dir");
+        let dirs = fs::read_dir(daemon_dir).expect("could not read daemon dir");
         let found_file = dirs
             .filter_map(|dir_result| dir_result.ok())
             .find_map(|dir| {
@@ -176,10 +226,9 @@ fn parse_args(daemon_arg: Option<String>) -> Args {
                 })
             });
         if let Some((dir, file)) = found_file {
-            let content = fs::read_to_string(file.path()).unwrap();
-            let mut args = serde_json::from_str::<Args>(&content).expect("json file not valid");
+            let mut args = load_config(&file.path())?;
             args.output_dir = Some(String::from(dir.to_str().unwrap()));
-            break args;
+            break Ok(args);
         }
     }
 }
@@ -195,7 +244,7 @@ fn main() -> Result<()> {
     let daemon_arg = DaemonArg::parse();
 
     loop {
-        let args: Args = parse_args(daemon_arg.daemon.clone());
+        let args = parse_args(daemon_arg.daemon.as_deref(), daemon_arg.config.as_deref())?;
         let output_dir = args.output_dir.clone().unwrap_or(String::from(
             std::env::current_dir().unwrap().to_str().unwrap(),
         ));
@@ -252,10 +301,16 @@ fn main() -> Result<()> {
             .for_each(|result| print_status(result, &songs_done_counter, songs.len(), title_width));
 
         if args.sync {
-            let expected_paths: HashSet<String> = songs
+            let expected_paths: HashSet<PathBuf> = songs
                 .iter()
                 .map(|song| {
-                    sync::song_output_path(song, &output_dir, &library_dir, args.mp3, args.flat)
+                    PathBuf::from(sync::song_output_path(
+                        song,
+                        &output_dir,
+                        &library_dir,
+                        args.mp3,
+                        args.flat,
+                    ))
                 })
                 .collect();
             sync::remove_unlisted_songs(&output_dir, &library_dir, &expected_paths, args.flat)?;
@@ -303,5 +358,46 @@ fn print_status(
         Err(e) => {
             println!("{:-6}/{} {:?}", count + 1, total, e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_uses_cli_defaults() {
+        let args: Args = serde_json::from_str(
+            r#"{
+                "host": "https://music.example.com/rest",
+                "username": "alice",
+                "password": "secret"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(args.coversize, 500);
+        assert!(!args.flat);
+        assert!(!args.sync);
+    }
+
+    #[test]
+    fn relative_output_dir_is_resolved_from_config_directory() {
+        let mut args: Args = serde_json::from_str(
+            r#"{
+                "host": "https://music.example.com/rest",
+                "username": "alice",
+                "password": "secret",
+                "output_dir": "../Music"
+            }"#,
+        )
+        .unwrap();
+
+        resolve_config_output_dir(&mut args, Path::new("/home/alice/.config/rocksonic.json"));
+
+        assert_eq!(
+            args.output_dir.as_deref(),
+            Some("/home/alice/.config/../Music")
+        );
     }
 }

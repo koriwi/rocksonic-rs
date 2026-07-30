@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 
@@ -16,7 +20,8 @@ pub fn song_output_path(
     } else {
         song.suffix.clone()
     };
-    if flat {
+    let library_path = Path::new(output_dir).join(library_dir);
+    let output_path = if flat {
         let sanitized_song = utils::sanitize_filename(&format!(
             "{} {} {:0>3} {}.{}",
             song.artist,
@@ -25,28 +30,28 @@ pub fn song_output_path(
             song.title,
             suffix
         ));
-        format!("{}/{}/{}", output_dir, library_dir, sanitized_song)
+        library_path.join(sanitized_song)
     } else {
         let sanitized_artist = utils::sanitize_filename(&song.artist);
         let sanitized_album = utils::sanitize_filename(&song.album);
-        let sanitized_directory = format!(
-            "{}/{}/{}/{}",
-            output_dir, library_dir, sanitized_artist, sanitized_album
-        );
         let sanitized_song = utils::sanitize_filename(&format!(
             "{:0>3} {}.{}",
             song.track.unwrap_or(0),
             song.title,
             suffix
         ));
-        format!("{}/{}", sanitized_directory, sanitized_song)
-    }
+        library_path
+            .join(sanitized_artist)
+            .join(sanitized_album)
+            .join(sanitized_song)
+    };
+    output_path.to_string_lossy().into_owned()
 }
 
 pub fn remove_unlisted_songs(
     output_dir: &str,
     library_dir: &str,
-    expected: &HashSet<String>,
+    expected: &HashSet<PathBuf>,
     flat: bool,
 ) -> Result<()> {
     let lib_path = Path::new(output_dir).join(library_dir);
@@ -60,22 +65,19 @@ pub fn remove_unlisted_songs(
     }
 }
 
-fn remove_from_flat_dir(lib_path: &Path, expected: &HashSet<String>) -> Result<()> {
+fn remove_from_flat_dir(lib_path: &Path, expected: &HashSet<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(lib_path)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            let path_str = path.to_string_lossy().to_string();
-            if !expected.contains(&path_str) {
-                fs::remove_file(&path)?;
-                println!("removed {}", path_str);
-            }
+        if path.is_file() && !expected.contains(&path) {
+            fs::remove_file(&path)?;
+            println!("removed {}", path.display());
         }
     }
     Ok(())
 }
 
-fn remove_from_nested_dirs(lib_path: &Path, expected: &HashSet<String>) -> Result<()> {
+fn remove_from_nested_dirs(lib_path: &Path, expected: &HashSet<PathBuf>) -> Result<()> {
     for artist_entry in fs::read_dir(lib_path)? {
         let artist_entry = artist_entry?;
         let artist_path = artist_entry.path();
@@ -100,7 +102,7 @@ fn remove_from_nested_dirs(lib_path: &Path, expected: &HashSet<String>) -> Resul
     Ok(())
 }
 
-fn remove_unlisted_from_album(album_path: &Path, expected: &HashSet<String>) -> Result<()> {
+fn remove_unlisted_from_album(album_path: &Path, expected: &HashSet<PathBuf>) -> Result<()> {
     for file_entry in fs::read_dir(album_path)? {
         let file_entry = file_entry?;
         let file_path = file_entry.path();
@@ -110,10 +112,9 @@ fn remove_unlisted_from_album(album_path: &Path, expected: &HashSet<String>) -> 
         if file_path.file_name().and_then(|n| n.to_str()) == Some("cover.jpeg") {
             continue;
         }
-        let path_str = file_path.to_string_lossy().to_string();
-        if !expected.contains(&path_str) {
+        if !expected.contains(&file_path) {
             fs::remove_file(&file_path)?;
-            println!("removed {}", path_str);
+            println!("removed {}", file_path.display());
         }
     }
     Ok(())
@@ -124,4 +125,27 @@ fn album_has_songs(album_path: &Path) -> Result<bool> {
         .filter_map(|e| e.ok())
         .any(|e| e.file_name().to_str() != Some("cover.jpeg"));
     Ok(has_songs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_path_ignores_trailing_directory_separator() {
+        let song = SubSonicSong {
+            id: "1".into(),
+            title: "Song".into(),
+            track: Some(1),
+            album: "Album".into(),
+            artist: "Artist".into(),
+            suffix: "flac".into(),
+            size: 1,
+        };
+
+        assert_eq!(
+            song_output_path(&song, "/tmp/music", "favs", None, false),
+            song_output_path(&song, "/tmp/music/", "favs", None, false)
+        );
+    }
 }

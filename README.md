@@ -46,6 +46,7 @@ If no output directory is given, the current directory is used.
 | `-t, --threads <n>` | `5` | Number of parallel download threads |
 | `-f, --flat` | off | Put all files in one folder; artist and album are added to the filename |
 | `-s, --sync` | off | Remove files from the output folder that are no longer in the playlist |
+| `--config <file>` | — | Read options from a JSON config file |
 
 ### Examples
 
@@ -57,6 +58,24 @@ rocksonic-rs ~/Music -h https://music.example.com/rest -u alice -p secret
 Sync a playlist and convert to MP3 at 320 kbps:
 ```
 rocksonic-rs ~/Music -h https://music.example.com/rest -u alice -p secret -l abc123 -m 320
+```
+
+Use a config file instead of passing the options each time:
+```
+rocksonic-rs --config ~/.config/rocksonic.json
+```
+
+The config uses the same JSON format as daemon mode. Add an `output_dir` value to choose the destination; relative paths are resolved from the config file's directory. If it is omitted, the current directory is used:
+
+```json
+{
+  "output_dir": "/home/alice/Music",
+  "host": "https://music.example.com/rest",
+  "username": "alice",
+  "password": "secret",
+  "mp3": 320,
+  "playlist": "abc123"
+}
 ```
 
 ## Output structure

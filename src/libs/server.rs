@@ -60,12 +60,8 @@ impl Server {
     }
 
     pub fn get_song(&self, id: &str, mp3: Option<u16>) -> Result<Response> {
-        let params = if let Some(bitrate) = mp3 {
-            Some(&format!("id={}&maxBitRate={}&format=mp3", id, bitrate))
-        } else {
-            Some(&format!("id={}", id))
-        };
-        let response = self.get("download", params)?;
+        let (endpoint, params) = song_request(id, mp3);
+        let response = self.get(endpoint, Some(&params))?;
 
         if let Some(content_type) = response.headers().get("Content-Type") {
             if content_type == "text/xml" {
@@ -95,5 +91,33 @@ impl Server {
             password,
         };
         server.test_connection().map(|()| server)
+    }
+}
+
+fn song_request(id: &str, mp3: Option<u16>) -> (&'static str, String) {
+    match mp3 {
+        Some(bitrate) => ("stream", format!("id={id}&maxBitRate={bitrate}&format=mp3")),
+        None => ("download", format!("id={id}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mp3_requests_use_the_transcoding_endpoint() {
+        assert_eq!(
+            song_request("song-id", Some(192)),
+            ("stream", "id=song-id&maxBitRate=192&format=mp3".to_string())
+        );
+    }
+
+    #[test]
+    fn original_format_requests_use_the_download_endpoint() {
+        assert_eq!(
+            song_request("song-id", None),
+            ("download", "id=song-id".to_string())
+        );
     }
 }
