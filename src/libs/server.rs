@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use reqwest::blocking::Response;
 
 pub struct Server {
+    client: reqwest::blocking::Client,
     host: String,
     username: String,
     password: String,
@@ -23,11 +24,7 @@ impl Server {
             Some(params) => format!("{host}/{endpoint}?{base_params}&{params}"),
             None => format!("{host}/{endpoint}?{base_params}"),
         };
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .retry(reqwest::retry::for_host(self.host.clone()).max_retries_per_request(1000))
-            .build()?;
-        let res = client.get(url).send()?;
+        let res = self.client.get(url).send()?;
         Ok(res)
     }
 
@@ -85,7 +82,12 @@ impl Server {
     }
 
     pub fn connect(host: String, username: String, password: String) -> Result<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .connect_timeout(Duration::from_secs(15))
+            .build()?;
         let server = Server {
+            client,
             host,
             username,
             password,

@@ -271,7 +271,7 @@ fn main() -> Result<()> {
         println!("{}", "Successfully connected to SubSonic".green().italic());
 
         let num_threads = args.threads.unwrap_or(5);
-        let _tpb = rayon::ThreadPoolBuilder::new()
+        let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads as usize)
             .build()?;
         let songs = match args.playlist.as_ref() {
@@ -281,24 +281,28 @@ fn main() -> Result<()> {
         let title_width = songs.iter().map(|s| s.title.len()).max().unwrap_or(0);
 
         let songs_done_counter = atomic::AtomicU32::new(0);
-        songs
-            .par_iter()
-            .map(|song| -> Result<(&SubSonicSong, Vec<Action>)> {
-                process_song(
-                    song,
-                    &server,
-                    &rocksonic_dir,
-                    cache_dir,
-                    &output_dir,
-                    &library_dir,
-                    args.mp3,
-                    args.flat,
-                    args.coversize,
-                )
-                .map(|actions| (song, actions))
-                .map_err(|e: Error| anyhow!("{} {} {}", song.title, song.id, e))
-            })
-            .for_each(|result| print_status(result, &songs_done_counter, songs.len(), title_width));
+        pool.install(|| {
+            songs
+                .par_iter()
+                .map(|song| -> Result<(&SubSonicSong, Vec<Action>)> {
+                    process_song(
+                        song,
+                        &server,
+                        &rocksonic_dir,
+                        cache_dir,
+                        &output_dir,
+                        &library_dir,
+                        args.mp3,
+                        args.flat,
+                        args.coversize,
+                    )
+                    .map(|actions| (song, actions))
+                    .map_err(|e: Error| anyhow!("{} {} {}", song.title, song.id, e))
+                })
+                .for_each(|result| {
+                    print_status(result, &songs_done_counter, songs.len(), title_width)
+                });
+        });
 
         if args.sync {
             let expected_paths: HashSet<PathBuf> = songs
